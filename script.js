@@ -1,4 +1,4 @@
-// Smooth anchors + active link + SAFE cyclic wrap + mobile menu
+// Smooth anchors + active link + STALL-DETECTED cyclic wrap + mobile menu
 (() => {
   const navLinks = [...document.querySelectorAll('.nav-item')];
   const sections = navLinks.map(a => document.getElementById(a.dataset.target));
@@ -6,7 +6,7 @@
   const menuBtn = document.querySelector('.menu-toggle');
   const logoBtn = document.getElementById('logoBtn');
 
-  // ---- Smooth anchor clicks
+  // Smooth anchor clicks
   navLinks.forEach(a => {
     a.addEventListener('click', (e) => {
       e.preventDefault();
@@ -19,7 +19,7 @@
     closeMenu();
   });
 
-  // ---- Mobile menu
+  // Mobile menu
   const closeMenu = () => {
     sidebar.classList.remove('open');
     menuBtn?.setAttribute('aria-expanded', 'false');
@@ -29,7 +29,7 @@
     menuBtn.setAttribute('aria-expanded', String(open));
   });
 
-  // ---- Active link (IntersectionObserver)
+  // Active link (IntersectionObserver)
   const linkById = Object.fromEntries(navLinks.map(a => [a.dataset.target, a]));
   const io = new IntersectionObserver((entries) => {
     entries.forEach((entry) => {
@@ -45,66 +45,72 @@
   }, { threshold: 0.6 });
   sections.forEach(s => io.observe(s));
 
-  // ---- Safer cyclic wrap
-  // Only wrap when:
-  // 1) You're truly at the top or bottom (with small tolerance)
-  // 2) You make TWO consecutive scrolls in that direction within 800ms
-  // 3) Cooldown to prevent jitter
+
+  
   let coolDown = false;
   const COOLDOWN_MS = 700;
-  const CONFIRM_MS = 800;
-  const TOL = 2; // px tolerance
+  const CONFIRM_MS = 900;
+  const TOL = 1;
 
   let lastDir = null;
   let lastTime = 0;
-  let dirCount = 0;
+  let stalledCount = 0;
 
-  const confirmDirection = (dir) => {
+  const atTop = () => window.scrollY <= TOL;
+  const atBottom = () =>
+    Math.ceil(window.scrollY + window.innerHeight) >=
+    (document.documentElement.scrollHeight - TOL);
+
+  const confirmStalled = (dir, stalled) => {
     const now = Date.now();
-    if (dir === lastDir && (now - lastTime) < CONFIRM_MS) {
-      dirCount += 1;
+    if (stalled && dir === lastDir && (now - lastTime) < CONFIRM_MS) {
+      stalledCount += 1;
     } else {
-      dirCount = 1;
+      stalledCount = stalled ? 1 : 0;
     }
     lastDir = dir;
     lastTime = now;
-    return dirCount >= 2; // require two nudges
+    return stalledCount >= 2; // require two stalled nudges
   };
-
-  const atTop = () => window.scrollY <= TOL;
-  const atBottom = () => (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - TOL);
 
   const wrapTo = (id) => {
     coolDown = true;
     document.getElementById(id).scrollIntoView({ behavior: 'smooth' });
-    setTimeout(() => { coolDown = false; }, COOLDOWN_MS);
+    setTimeout(() => (coolDown = false), COOLDOWN_MS);
   };
 
-  // Wheel
+  // Wheel: detect "stalled" (no movement) first
   window.addEventListener('wheel', (e) => {
     if (coolDown) return;
     const dir = e.deltaY > 0 ? 'down' : 'up';
+    const beforeY = window.scrollY;
 
-    // Only consider wrapping if *truly* at edges and user confirms direction
-    if (dir === 'down' && atBottom() && confirmDirection('down')) {
-      wrapTo('about');     // bottom -> About
-    } else if (dir === 'up' && atTop() && confirmDirection('up')) {
-      wrapTo('projects');  // top -> Projects
-    }
+    // After the wheel event, check if the page actually moved
+    requestAnimationFrame(() => {
+      const afterY = window.scrollY;
+      const stalled = Math.abs(afterY - beforeY) < 0.5;
+
+      if (dir === 'down' && atBottom() && confirmStalled('down', stalled)) {
+        wrapTo('about');
+      } else if (dir === 'up' && atTop() && confirmStalled('up', stalled)) {
+        wrapTo('projects');
+      }
+    });
   }, { passive: true });
 
-  // Touch (mobile)
+  // Touch (mobile): require two real swipes while at edge
   let touchStartY = null;
   window.addEventListener('touchstart', (e) => { touchStartY = e.touches[0].clientY; }, { passive: true });
   window.addEventListener('touchend', (e) => {
     if (coolDown || touchStartY === null) return;
     const dy = e.changedTouches[0].clientY - touchStartY;
-    const dir = dy < -40 ? 'down' : dy > 40 ? 'up' : null; // need a real swipe
-    if (!dir) return;
+    const dir = dy < -60 ? 'down' : dy > 60 ? 'up' : null; // stronger swipe
+    if (!dir) { touchStartY = null; return; }
 
-    if (dir === 'down' && atBottom() && confirmDirection('down')) {
+    const stalled = (dir === 'down' && atBottom()) || (dir === 'up' && atTop());
+    if (dir === 'down' && atBottom() && confirmStalled('down', stalled)) {
       wrapTo('about');
-    } else if (dir === 'up' && atTop() && confirmDirection('up')) {
+    } else if (dir === 'up' && atTop() && confirmStalled('up', stalled)) {
       wrapTo('projects');
     }
     touchStartY = null;
