@@ -1,104 +1,112 @@
-// Smooth anchor clicks + active link + cyclic scroll wrap + mobile menu
+// Smooth anchors + active link + SAFE cyclic wrap + mobile menu
 (() => {
-    const navLinks = [...document.querySelectorAll('.nav-item')];
-    const sections = navLinks.map(a => document.getElementById(a.dataset.target));
-    const sidebar = document.querySelector('.sidebar');
-    const menuBtn = document.querySelector('.menu-toggle');
-    const logoBtn = document.getElementById('logoBtn');
+  const navLinks = [...document.querySelectorAll('.nav-item')];
+  const sections = navLinks.map(a => document.getElementById(a.dataset.target));
+  const sidebar = document.querySelector('.sidebar');
+  const menuBtn = document.querySelector('.menu-toggle');
+  const logoBtn = document.getElementById('logoBtn');
 
-    // Smooth scroll for sidebar links
-    navLinks.forEach(a => {
-        a.addEventListener('click', e => {
-            e.preventDefault();
-            document.getElementById(a.dataset.target).scrollIntoView({ behavior: 'smooth', block: 'start' });
-            closeMenu();
-        });
+  // ---- Smooth anchor clicks
+  navLinks.forEach(a => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      document.getElementById(a.dataset.target).scrollIntoView({ behavior: 'smooth', block: 'start' });
+      closeMenu();
     });
+  });
+  logoBtn?.addEventListener('click', () => {
+    document.getElementById('about').scrollIntoView({ behavior: 'smooth' });
+    closeMenu();
+  });
 
-    logoBtn.addEventListener('click', () => {
-        document.getElementById('about').scrollIntoView({ behavior: 'smooth' });
-        closeMenu();
+  // ---- Mobile menu
+  const closeMenu = () => {
+    sidebar.classList.remove('open');
+    menuBtn?.setAttribute('aria-expanded', 'false');
+  };
+  menuBtn?.addEventListener('click', () => {
+    const open = sidebar.classList.toggle('open');
+    menuBtn.setAttribute('aria-expanded', String(open));
+  });
+
+  // ---- Active link (IntersectionObserver)
+  const linkById = Object.fromEntries(navLinks.map(a => [a.dataset.target, a]));
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      const id = entry.target.id;
+      if (entry.isIntersecting) {
+        navLinks.forEach(l => l.classList.remove('active'));
+        linkById[id].classList.add('active');
+        linkById[id].setAttribute('aria-current', 'page');
+      } else {
+        linkById[id].removeAttribute('aria-current');
+      }
     });
+  }, { threshold: 0.6 });
+  sections.forEach(s => io.observe(s));
 
-    // Mobile menu toggle
-    const closeMenu = () => {
-        sidebar.classList.remove('open');
-        menuBtn.setAttribute('aria-expanded', 'false');
-    };
-    menuBtn.addEventListener('click', () => {
-        const open = sidebar.classList.toggle('open');
-        menuBtn.setAttribute('aria-expanded', String(open));
-    });
+  // ---- Safer cyclic wrap
+  // Only wrap when:
+  // 1) You're truly at the top or bottom (with small tolerance)
+  // 2) You make TWO consecutive scrolls in that direction within 800ms
+  // 3) Cooldown to prevent jitter
+  let coolDown = false;
+  const COOLDOWN_MS = 700;
+  const CONFIRM_MS = 800;
+  const TOL = 2; // px tolerance
 
-    // Active link highlighting via IntersectionObserver
-    const linkById = Object.fromEntries(navLinks.map(a => [a.dataset.target, a]));
-    const io = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            const id = entry.target.id;
-            if (entry.isIntersecting) {
-                for (const l of navLinks) l.classList.remove('active');
-                linkById[id].classList.add('active');
-                linkById[id].setAttribute('aria-current', 'page');
-            } else {
-                linkById[id].removeAttribute('aria-current');
-            }
-        });
-    }, { root: null, threshold: 0.6 });
+  let lastDir = null;
+  let lastTime = 0;
+  let dirCount = 0;
 
-    sections.forEach(s => io.observe(s));
+  const confirmDirection = (dir) => {
+    const now = Date.now();
+    if (dir === lastDir && (now - lastTime) < CONFIRM_MS) {
+      dirCount += 1;
+    } else {
+      dirCount = 1;
+    }
+    lastDir = dir;
+    lastTime = now;
+    return dirCount >= 2; // require two nudges
+  };
 
-    // Cyclic scroll wrap (wheel + touch), debounced to avoid jitter
-    let coolDown = false;
-    const COOLDOWN_MS = 700;
+  const atTop = () => window.scrollY <= TOL;
+  const atBottom = () => (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - TOL);
 
-    const currentSection = () => {
-        // Return section most in view
-        const mid = window.innerHeight / 2;
-        let best = sections[0], bestDist = Infinity;
-        sections.forEach(sec => {
-            const rect = sec.getBoundingClientRect();
-            const center = rect.top + rect.height / 2;
-            const dist = Math.abs(center - mid);
-            if (dist < bestDist) { bestDist = dist; best = sec; }
-        });
-        return best;
-    };
+  const wrapTo = (id) => {
+    coolDown = true;
+    document.getElementById(id).scrollIntoView({ behavior: 'smooth' });
+    setTimeout(() => { coolDown = false; }, COOLDOWN_MS);
+  };
 
-    const wrapIfNeeded = (direction) => {
-        if (coolDown) return;
-        const cur = currentSection();
-        const rect = cur.getBoundingClientRect();
+  // Wheel
+  window.addEventListener('wheel', (e) => {
+    if (coolDown) return;
+    const dir = e.deltaY > 0 ? 'down' : 'up';
 
-        // Downward wrap: at bottom of Projects -> About
-        if (direction === 'down' && cur.id === 'projects' && rect.bottom <= window.innerHeight + 2) {
-            coolDown = true;
-            document.getElementById('about').scrollIntoView({ behavior: 'smooth' });
-            setTimeout(() => (coolDown = false), COOLDOWN_MS);
-        }
+    // Only consider wrapping if *truly* at edges and user confirms direction
+    if (dir === 'down' && atBottom() && confirmDirection('down')) {
+      wrapTo('about');     // bottom -> About
+    } else if (dir === 'up' && atTop() && confirmDirection('up')) {
+      wrapTo('projects');  // top -> Projects
+    }
+  }, { passive: true });
 
-        // Upward wrap: above top of About -> Projects
-        if (direction === 'up' && cur.id === 'about' && rect.top >= -2) {
-            coolDown = true;
-            document.getElementById('projects').scrollIntoView({ behavior: 'smooth' });
-            setTimeout(() => (coolDown = false), COOLDOWN_MS);
-        }
-    };
+  // Touch (mobile)
+  let touchStartY = null;
+  window.addEventListener('touchstart', (e) => { touchStartY = e.touches[0].clientY; }, { passive: true });
+  window.addEventListener('touchend', (e) => {
+    if (coolDown || touchStartY === null) return;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    const dir = dy < -40 ? 'down' : dy > 40 ? 'up' : null; // need a real swipe
+    if (!dir) return;
 
-    // Wheel
-    window.addEventListener('wheel', (e) => {
-        const dir = e.deltaY > 0 ? 'down' : 'up';
-        wrapIfNeeded(dir);
-    }, { passive: true });
-
-    // Touch (mobile)
-    let touchStartY = null;
-    window.addEventListener('touchstart', (e) => { touchStartY = e.touches[0].clientY; }, { passive: true });
-    window.addEventListener('touchend', (e) => {
-        if (touchStartY === null) return;
-        const dy = e.changedTouches[0].clientY - touchStartY;
-        const dir = dy < -40 ? 'down' : dy > 40 ? 'up' : null;
-        if (dir) wrapIfNeeded(dir);
-        touchStartY = null;
-    }, { passive: true });
-
+    if (dir === 'down' && atBottom() && confirmDirection('down')) {
+      wrapTo('about');
+    } else if (dir === 'up' && atTop() && confirmDirection('up')) {
+      wrapTo('projects');
+    }
+    touchStartY = null;
+  }, { passive: true });
 })();
